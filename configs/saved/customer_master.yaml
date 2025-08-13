@@ -1,0 +1,49 @@
+extract:
+  output: true
+  standardize_headers: true
+transform:
+  output: true
+  columns:
+    - name: customer_id
+      type: int
+    - name: name
+      type: str
+    - name: email
+      type: str
+    - name: signup_date
+      type: date
+    - name: status
+      type: str
+    - name: region
+      type: str
+  column_ops:
+    rename:
+      signup_date: registration_date
+    drop: [email]
+    add:
+      is_north: "lambda row: row['region'] == 'North'"
+    cast:
+      customer_id: int
+    fillna:
+      status: 'unknown'
+    str:
+      name: lower
+    replace:
+      status:
+        inactive: 'INACTIVE'
+    order: [customer_id, name, registration_date, status, region, is_north]
+  row_filters:
+    equals:
+      status: 'active'
+    not_equals:
+      region: 'West'
+    in:
+      region: ['North', 'South']
+    contains:
+      name: 'user'
+    gt:
+      customer_id: 1020
+    lambda:
+      custom_filter: "lambda row: row['customer_id'] % 2 == 0"
+load:
+  output: true

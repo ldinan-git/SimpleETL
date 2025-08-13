@@ -1,0 +1,20 @@
+# Example YAML config for SimpleETL
+extract:
+  input_dir: ../data/input
+  file_pattern: '*.csv'
+  output: true
+  standardize_headers: true
+transform:
+  output: true
+  columns:
+    - name: amount
+      type: float
+    - name: date
+      type: date
+  filters:
+    - column: status
+      equals: 'active'
+load:
+  join_on: id
+  output: ../data/output/combined.csv
+  output: true

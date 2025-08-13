@@ -1,0 +1,30 @@
+extract:
+  input_file: ../data/input/sales_transactions.csv
+  output_file: ../data/extract_output/sales_transactions.csv
+  output: true
+  standardize_headers: true
+transform:
+  output: true
+  columns:
+    - name: transaction_id
+      type: int
+    - name: date
+      type: date
+    - name: customer_id
+      type: int
+    - name: product
+      type: str
+    - name: quantity
+      type: int
+    - name: price
+      type: float
+    - name: total
+      type: float
+    - name: status
+      type: str
+  filters:
+    - column: status
+      equals: 'active'
+load:
+  output: C:\Users\luke_\OneDrive\Documents\GitHub\SimpleETL\data\output\sales_transactions_clean.csv
+  output: true

@@ -1,0 +1,17 @@
+# Default YAML config for a delimited (CSV) ETL job
+extract:
+  delimiter: ','
+  encoding: 'utf-8'
+  header: 0
+  quotechar: '"'
+  skiprows: null
+  na_values: ['NA', 'N/A', '']
+  output: true
+
+transform:
+  # No transforms by default
+  output: false
+
+load:
+  # No special load options by default
+  output: true

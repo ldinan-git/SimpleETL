@@ -1,0 +1,13 @@
+transaction_id,date,customer_id,product,quantity,price,total,status
+1,2025-08-01,1001,Widget,2,25.00,50.00,active
+2,2025-08-01,1002,Gadget,1,40.00,40.00,active
+3,2025-08-02,1003,Widget,3,25.00,75.00,returned
+4,2025-08-02,1001,Thingamajig,5,10.00,50.00,active
+5,2025-08-03,1004,Gadget,2,40.00,80.00,active
+6,2025-08-03,1002,Widget,1,25.00,25.00,active
+7,2025-08-04,1003,Thingamajig,2,10.00,20.00,active
+8,2025-08-04,1001,Gadget,1,40.00,40.00,returned
+9,2025-08-05,1004,Widget,4,25.00,100.00,active
+10,2025-08-05,1002,Thingamajig,3,10.00,30.00,active
+11,2025-08-06,1003,Gadget,2,40.00,80.00,active
+12,2025-08-06,1001,Widget,1,25.00,25.00,active
