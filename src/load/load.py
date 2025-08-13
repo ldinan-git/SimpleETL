@@ -41,6 +41,8 @@ def run_load(
         Returns:
             str: Absolute path to the output file for the step.
         """
+        base = os.path.splitext(os.path.basename(yaml_path))[0]
+        return os.path.abspath(os.path.join('data', step, f"{base}_{step}.csv"))
 
     if df is not None:
         print("[Load] Using DataFrame passed in memory.")

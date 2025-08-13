@@ -66,6 +66,36 @@ def run_transform(
             raise FileNotFoundError(f"[Transform] Extracted file not found: {input_file}")
         df = pd.read_csv(input_file, dtype=str)
 
+
+    # --- Cast columns to specified types before filters ---
+    columns_spec = config.get('columns', {})
+    type_map = {
+        'int': 'Int64',
+        'integer': 'Int64',
+        'float': 'float64',
+        'double': 'float64',
+        'bool': 'boolean',
+        'boolean': 'boolean',
+        'date': 'datetime64[ns]',
+        'datetime': 'datetime64[ns]',
+        'string': 'string',
+        'str': 'string',
+        'object': 'string',
+    }
+    for col, typ in columns_spec.items():
+        if col in df.columns:
+            pandas_type = type_map.get(str(typ).lower(), 'string')
+            try:
+                if pandas_type == 'datetime64[ns]':
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                elif pandas_type == 'boolean':
+                    df[col] = df[col].astype('boolean')
+                else:
+                    df[col] = df[col].astype(pandas_type)
+                print(f"[Transform] Cast column '{col}' to {pandas_type}")
+            except Exception as e:
+                print(f"[Transform] WARNING: Could not cast column '{col}' to {pandas_type}: {e}")
+
     # Column operations
     col_ops_spec = transform_config.get('column_ops', {})
     if col_ops_spec:

@@ -25,6 +25,40 @@ config_mode = st.radio(
 )
 
 if config_mode == "Create New Config":
+    # --- SESSION STATE RESET LOGIC ---
+    # If extract settings change, reset everything downstream
+    def reset_after_extract():
+        for k in ["preview_confirmed", "last_uploaded_file", "column_types", "debug_types", "column_types_confirmed", "confirmed_column_types", "debug_types_confirmed", "filters"]:
+            if k in st.session_state:
+                del st.session_state[k]
+    def reset_after_upload():
+        for k in ["column_types", "debug_types", "column_types_confirmed", "confirmed_column_types", "debug_types_confirmed", "filters"]:
+            if k in st.session_state:
+                del st.session_state[k]
+    def reset_after_column_types():
+        for k in ["filters"]:
+            if k in st.session_state:
+                del st.session_state[k]
+
+    # Watch for extract setting changes
+    extract_keys = ["delimiter", "encoding", "header", "quotechar", "skiprows", "na_values"]
+    for key in extract_keys:
+        if key in st.session_state and f"_prev_{key}" in st.session_state:
+            if st.session_state[key] != st.session_state[f"_prev_{key}"]:
+                reset_after_extract()
+        st.session_state[f"_prev_{key}"] = st.session_state.get(key)
+
+    # Watch for file upload changes
+    if "last_uploaded_file" in st.session_state and "_prev_last_uploaded_file" in st.session_state:
+        if st.session_state["last_uploaded_file"] != st.session_state["_prev_last_uploaded_file"]:
+            reset_after_upload()
+    st.session_state["_prev_last_uploaded_file"] = st.session_state.get("last_uploaded_file")
+
+    # Watch for column type confirmation changes
+    if "column_types_confirmed" in st.session_state and "_prev_column_types_confirmed" in st.session_state:
+        if st.session_state["column_types_confirmed"] != st.session_state["_prev_column_types_confirmed"]:
+            reset_after_column_types()
+    st.session_state["_prev_column_types_confirmed"] = st.session_state.get("column_types_confirmed")
     st.header("2. Create a New Config")
     st.markdown("""
     **Extract Settings** control how your input file is read. For most business CSVs, the defaults are correct. Only change these if you know your file is different.
@@ -64,6 +98,11 @@ if config_mode == "Create New Config":
                 if lines:
                     first_row = next(csv.reader([lines[0]], delimiter=autodetect_result["delimiter"]))
                     autodetect_result["header"] = 0 if all(any(c.isalpha() for c in col) for col in first_row) else 1
+            # Set session_state so UI fields update
+            st.session_state["delimiter"] = autodetect_result["delimiter"]
+            st.session_state["encoding"] = autodetect_result["encoding"]
+            st.session_state["header"] = autodetect_result["header"]
+            st.session_state["quotechar"] = autodetect_result["quotechar"]
             st.success(f"Auto-detected: Delimiter '{autodetect_result['delimiter']}', Encoding '{autodetect_result['encoding']}', Header Row {autodetect_result['header']}, Quotechar '{autodetect_result['quotechar']}'")
         except Exception as e:
             st.warning(f"Auto-detect failed: {e}")
@@ -95,6 +134,8 @@ if config_mode == "Create New Config":
     skiprows = st.session_state["skiprows"]
     if 'na_values' not in locals():
         na_values = ""
+    # Always define extract_output, default True
+    extract_output = True
     if show_advanced:
         st.markdown("Advanced options are rarely needed. Only use if your file has extra header rows or special missing value codes.")
         st.caption("Rows to skip at the start of the file (comma-separated or blank). E.g., '1,2' skips the first two rows.")
@@ -107,12 +148,24 @@ if config_mode == "Create New Config":
     # --- File upload and preview step ---
     st.subheader("Step 2: Upload a File to Preview")
     uploaded_file = st.file_uploader("Upload a file to preview data (optional, but recommended)")
-    preview_confirmed = False
+    refresh_preview = st.button("Refresh Preview")
+    if "preview_confirmed" not in st.session_state:
+        st.session_state["preview_confirmed"] = False
+    preview_confirmed = st.session_state["preview_confirmed"]
     df_preview = None
+
+    # If a new file is uploaded or extract settings change, reset preview_confirmed
     if uploaded_file is not None:
+        if "last_uploaded_file" not in st.session_state or st.session_state["last_uploaded_file"] != uploaded_file:
+            st.session_state["preview_confirmed"] = False
+            st.session_state["last_uploaded_file"] = uploaded_file
+
+    # Step 2: Only show preview if not confirmed
+    if uploaded_file is not None and not preview_confirmed:
         import tempfile
         import shutil
         try:
+            uploaded_file.seek(0)
             # Save uploaded file to a temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as tmp_in:
                 tmp_in.write(uploaded_file.read())
@@ -160,7 +213,9 @@ if config_mode == "Create New Config":
             df_preview = run_extract(tmp_in_path, tmp_yaml_path, return_df=True)
             st.markdown("#### Data Preview (first 10 rows):")
             st.dataframe(df_preview.head(10))
-            preview_confirmed = st.checkbox("Preview looks correct. Continue to column type selection.")
+            if st.button("Preview looks correct. Continue to column type selection."):
+                st.session_state["preview_confirmed"] = True
+                preview_confirmed = True
         except Exception as e:
             st.warning(f"Could not preview file: {e}")
         finally:
@@ -174,36 +229,235 @@ if config_mode == "Create New Config":
                 pass
 
     # Only show the rest of the config form if preview is confirmed or no file uploaded
-    if (uploaded_file is None) or preview_confirmed:
-        # Step 3: Column type selection if preview is available
-        column_types = {}
-        if df_preview is not None:
-            st.subheader("Step 3: Specify Column Types")
-            st.caption("Review and adjust the type for each column. This helps with validation and filtering in later steps.")
-            type_options = ["string", "int", "float", "bool", "date"]
-            pandas_type_map = {
-                "object": "string",
-                "int64": "int",
-                "float64": "float",
-                "bool": "bool",
-                "datetime64[ns]": "date"
-            }
+    if uploaded_file is not None and preview_confirmed:
+            # Re-run extract preview to get df_preview for type detection
+            import tempfile
+            import shutil
+            try:
+                uploaded_file.seek(0)
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as tmp_in:
+                    tmp_in.write(uploaded_file.read())
+                    tmp_in_path = tmp_in.name
+                import yaml
+                skiprows_val = None
+                if skiprows:
+                    skiprows_clean = [s.strip() for s in skiprows.split(",") if s.strip()]
+                    if len(skiprows_clean) == 1:
+                        try:
+                            skiprows_val = int(skiprows_clean[0])
+                        except Exception:
+                            skiprows_val = skiprows_clean
+                    elif len(skiprows_clean) > 1:
+                        try:
+                            skiprows_val = [int(s) for s in skiprows_clean]
+                        except Exception:
+                            skiprows_val = skiprows_clean
+                extract_config_dict = {
+                    "extract": {
+                        "delimiter": delimiter,
+                        "encoding": encoding,
+                        "header": header,
+                        "quotechar": quotechar,
+                        "skiprows": skiprows_val,
+                        "na_values": [v.strip() for v in na_values.split(",") if v.strip()] if na_values else None,
+                        "output": False,
+                    },
+                    "transform": {},
+                    "load": {},
+                }
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.yaml', mode='w', encoding='utf-8') as tmp_yaml:
+                    yaml.dump(extract_config_dict, tmp_yaml, sort_keys=False)
+                    tmp_yaml_path = tmp_yaml.name
+                import sys
+                sys.path.insert(0, str(Path('src').resolve()))
+                from extract.extract import run_extract
+                df_preview = run_extract(tmp_in_path, tmp_yaml_path, return_df=True)
+            except Exception as e:
+                st.warning(f"Could not reload preview for type detection: {e}")
+                df_preview = None
+            finally:
+                try:
+                    if 'tmp_in_path' in locals() and os.path.exists(tmp_in_path):
+                        os.remove(tmp_in_path)
+                    if 'tmp_yaml_path' in locals() and os.path.exists(tmp_yaml_path):
+                        os.remove(tmp_yaml_path)
+                except Exception:
+                    pass
+            if df_preview is not None:
+                st.subheader("Step 3: Specify Column Types")
+                st.caption("Review and adjust the type for each column. This helps with validation and filtering in later steps.")
+                type_options = ["string", "int", "float", "bool", "date"]
+                pandas_type_map = {
+                    "object": "string",
+                    "int64": "int",
+                    "float64": "float",
+                    "bool": "bool",
+                    "datetime64[ns]": "date"
+                }
+                if "column_types" not in st.session_state:
+                    st.session_state["column_types"] = {}
+                if st.button("Auto-Detect Column Types"):
+                    import re
+                    def custom_detect_type(series):
+                        vals = series.dropna().astype(str)
+                        if len(vals) == 0:
+                            return "string"
+                        # If all numbers (no decimal, no / or -), int
+                        if vals.apply(lambda x: re.fullmatch(r"[-+]?\d+", x) is not None).all():
+                            return "int"
+                        # If all numbers with / or - (date-like)
+                        if vals.apply(lambda x: re.fullmatch(r"[-+]?\d+([/-]\d+)+", x) is not None).all():
+                            return "date"
+                        # If any value has a decimal and all are numbers with optional decimal
+                        if vals.apply(lambda x: re.fullmatch(r"[-+]?\d*\.\d+", x) is not None or re.fullmatch(r"[-+]?\d+", x) is not None).all():
+                            if vals.apply(lambda x: "." in x).any():
+                                return "float"
+                            else:
+                                return "int"
+                        # Otherwise string
+                        return "string"
+                    debug_types = {}
+                    for col in df_preview.columns:
+                        inferred = custom_detect_type(df_preview[col])
+                        debug_types[col] = inferred
+                        st.session_state["column_types"][col] = inferred
+                    st.session_state["debug_types"] = debug_types
+                    # Ensure preview_confirmed is True so the table is always shown after auto-detect
+                    st.session_state["preview_confirmed"] = True
+                    # Use st.rerun() if available, else fallback
+                    try:
+                        st.rerun()
+                    except AttributeError:
+                        try:
+                            st.experimental_rerun()
+                        except AttributeError:
+                            st.warning("Streamlit rerun not supported in this version. Please refresh the page manually.")
+            # Show debug types if present
+            if "debug_types" in st.session_state:
+                st.info(f"[DEBUG] Auto-detected types: {st.session_state['debug_types']}")
+
+            # --- Column type selection table (always show after preview_confirmed) ---
+            column_types = {}
+            import streamlit as stmod
+            st.write("**Column Type Selection Table**")
+            import pandas as pd
+            import streamlit.components.v1 as components
+            # Build a table-like layout
+            cols = st.columns([2, 2, 4])
+            cols[0].markdown("**Column Name**")
+            cols[1].markdown("**Type**")
+            cols[2].markdown("**Sample Value**")
             for col in df_preview.columns:
                 inferred = pandas_type_map.get(str(df_preview[col].dtype), "string")
-                column_types[col] = st.selectbox(f"Type for '{col}'", options=type_options, index=type_options.index(inferred) if inferred in type_options else 0)
-        else:
-            column_types = None
+                default_type = st.session_state["column_types"].get(col, inferred)
+                with st.container():
+                    c1, c2, c3 = st.columns([2, 2, 4])
+                    c1.write(col)
+                    # Render selectbox and update column_types in session state only
+                    selected_type = c2.selectbox(
+                        "",
+                        options=type_options,
+                        index=type_options.index(default_type) if default_type in type_options else 0,
+                        key=f"coltype_{col}"
+                    )
+                    st.session_state["column_types"][col] = selected_type
+                    column_types[col] = selected_type
+                    # Show a sample value from the first non-null row
+                    sample_val = df_preview[col].dropna().astype(str).head(1).tolist()
+                    c3.write(sample_val[0] if sample_val else "")
 
-        st.subheader("Transform Settings")
-        st.caption("Transform settings control how your data is changed after extraction. Leave unchecked unless you want to save the intermediate result.")
-        transform_output = st.checkbox("Write Transform Output File", value=False)
-        st.subheader("Load Settings")
-        st.caption("Load settings control the final output. Keep checked to save the final processed file.")
-        load_output = st.checkbox("Write Final Output File", value=True)
-        submitted_config = st.button("Save Config")
-    else:
-        submitted_config = False
+            # --- Column type confirmation ---
+            if st.button("Confirm Column Types and Continue to Transform Settings"):
+                # Explicitly update column_types to match the current selectbox values
+                for col in df_preview.columns:
+                    st.session_state["column_types"][col] = st.session_state.get(f"coltype_{col}", st.session_state["column_types"][col])
+                # Save a snapshot of confirmed types
+                st.session_state["confirmed_column_types"] = dict(st.session_state["column_types"])
+                st.session_state["column_types_confirmed"] = True
+                st.session_state["debug_types_confirmed"] = dict(st.session_state["column_types"])
+            if "column_types_confirmed" not in st.session_state:
+                st.session_state["column_types_confirmed"] = False
 
+            # --- Only show filter UI after column types are confirmed ---
+            if st.session_state["column_types_confirmed"]:
+                if "debug_types_confirmed" in st.session_state:
+                    st.info(f"[DEBUG] Confirmed column types: {st.session_state['debug_types_confirmed']}")
+                st.subheader("Transform Settings: Add Filters")
+                if "filters" not in st.session_state:
+                    st.session_state["filters"] = []
+                # Add Filter UI
+                confirmed_types = st.session_state.get('debug_types_confirmed', {})
+                # --- Column and operation selectboxes OUTSIDE the form ---
+                filter_col = st.selectbox("Column to filter on", options=list(confirmed_types.keys()), key="filter_col_select")
+                col_type = confirmed_types[filter_col]
+                col_type_norm = str(col_type).strip().lower()
+                st.info(f"[DEBUG] Filter col_type: {col_type}, col_type_norm: {col_type_norm}")
+                if col_type_norm in ("int", "float"):
+                    op_options = ["equals", "not equal", "greater than", "less than", "greater or equal", "less or equal"]
+                elif col_type_norm == "date":
+                    op_options = ["equals", "not equal", "after", "before", "between"]
+                else:
+                    op_options = ["equals", "not equal", "contains", "not contains", "starts with", "ends with"]
+                filter_op = st.selectbox("Operation", options=op_options, key="filter_op_select")
+                # --- Value input and submit button INSIDE the form ---
+                def cast_filter_value(val, typ):
+                    if typ == "int":
+                        try:
+                            return int(val)
+                        except Exception:
+                            return val
+                    elif typ == "float":
+                        try:
+                            return float(val)
+                        except Exception:
+                            return val
+                    elif typ == "bool":
+                        if str(val).lower() in ("true", "1", "yes"):
+                            return True
+                        elif str(val).lower() in ("false", "0", "no"):
+                            return False
+                        else:
+                            return val
+                    else:
+                        return val
+
+                with st.form("add_filter_form", clear_on_submit=True):
+                    if col_type_norm == "date" and filter_op == "between":
+                        filter_val1 = st.text_input("Start Date (YYYY-MM-DD or similar)", key="filter_val1")
+                        filter_val2 = st.text_input("End Date (YYYY-MM-DD or similar)", key="filter_val2")
+                        filter_val = (filter_val1, filter_val2)
+                        casted_val = (filter_val1, filter_val2)  # Dates left as string for now
+                    else:
+                        filter_val = st.text_input("Value", key="filter_val")
+                        # Support comma-separated lists for 'in' operations in the future
+                        if filter_op in ["in", "not in"]:
+                            vals = [v.strip() for v in filter_val.split(",") if v.strip()]
+                            casted_val = [cast_filter_value(v, col_type_norm) for v in vals]
+                        else:
+                            casted_val = cast_filter_value(filter_val, col_type_norm)
+                    add_filter = st.form_submit_button("Add Filter")
+                    if add_filter:
+                        st.session_state["filters"].append({
+                            "column": filter_col,
+                            "type": col_type,
+                            "operation": filter_op,
+                            "value": casted_val
+                        })
+                        if col_type_norm == "date" and filter_op == "between":
+                            st.success(f"Added filter: {filter_col} {filter_op} {casted_val[0]} and {casted_val[1]}")
+                        else:
+                            st.success(f"Added filter: {filter_col} {filter_op} {casted_val}")
+                # Show current filters
+                if st.session_state["filters"]:
+                    st.markdown("**Current Filters:**")
+                    for i, f in enumerate(st.session_state["filters"]):
+                        st.write(f"{i+1}. {f['column']} ({f['type']}) {f['operation']} {f['value']}")
+
+
+    st.subheader("Transform Settings")
+    st.caption("Transform settings control how your data is changed after extraction. Leave unchecked unless you want to save the intermediate result.")
+    transform_output = st.checkbox("Write Transform Output File", value=False)
+    submitted_config = st.button("Save Config")
     if submitted_config:
         if not config_name.strip():
             st.error("Please provide a configuration name.")
@@ -222,6 +476,40 @@ if config_mode == "Create New Config":
                         skiprows_val = [int(s) for s in skiprows_clean]
                     except Exception:
                         skiprows_val = skiprows_clean
+            # Convert filters list to row_filters dict as per docs
+            filters_list = st.session_state.get("filters", [])
+            row_filters = {}
+            op_map = {
+                "equals": "equals",
+                "not equal": "not_equals",
+                "greater than": "gt",
+                "less than": "lt",
+                "greater or equal": "ge",
+                "less or equal": "le",
+                "in": "in",
+                "not in": "not_in",
+                "contains": "contains",
+                "not contains": "not_contains",
+                "starts with": "startswith",
+                "ends with": "endswith",
+                "after": "gt",
+                "before": "lt",
+                "between": "between",  # Special handling below
+            }
+            for f in filters_list:
+                op = op_map.get(f["operation"], f["operation"])
+                col = f["column"]
+                val = f["value"]
+                # Special handling for 'between' (store as dict with 'start' and 'end')
+                if op == "between" and isinstance(val, (tuple, list)) and len(val) == 2:
+                    if "between" not in row_filters:
+                        row_filters["between"] = {}
+                    row_filters["between"][col] = {"start": val[0], "end": val[1]}
+                else:
+                    if op not in row_filters:
+                        row_filters[op] = {}
+                    row_filters[op][col] = val
+
             config_dict = {
                 "extract": {
                     "delimiter": delimiter,
@@ -235,10 +523,9 @@ if config_mode == "Create New Config":
                 "columns": column_types if (uploaded_file is not None and preview_confirmed and column_types) else None,
                 "transform": {
                     "output": transform_output,
+                    "row_filters": row_filters if row_filters else None
                 },
-                "load": {
-                    "output": load_output,
-                },
+                "load": {"output": True},
             }
             config_path = USER_CONFIGS_DIR / f"{config_name.replace(' ', '_').lower()}.yaml"
             with open(config_path, "w", encoding="utf-8") as f:

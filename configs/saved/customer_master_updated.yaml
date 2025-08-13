@@ -1,0 +1,22 @@
+extract:
+  delimiter: '|'
+  encoding: ascii
+  header: 0
+  quotechar: '"'
+  skiprows: null
+  na_values: null
+  output: true
+columns:
+  customer_id: int
+  name: string
+  email: string
+  signup_date: date
+  status: string
+  region: string
+transform:
+  output: false
+  row_filters:
+    equals:
+      customer_id: 1034
+load:
+  output: true
